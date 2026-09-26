@@ -1,0 +1,4 @@
+.env
+node_modules/
+data/posts.json
+.DS_Store
