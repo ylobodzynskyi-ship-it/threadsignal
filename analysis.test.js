@@ -23,6 +23,11 @@ test('import rejects invalid statistics', () => {
   assert.throws(() => normalizePost({ text: 'Достатньо довгий текст', views: -1 }), /views/);
 });
 
+test('preserves current Threads permalinks', () => {
+  const url = 'https://www.threads.com/@author/post/example';
+  assert.equal(normalizePost({ text: 'Достатньо довгий текст', url }).url, url);
+});
+
 test('gap analysis highlights dimensions where viral examples score higher', () => {
   const draft = { hook: { value: .4 }, specificity: { value: .8 }, conversation: { value: .5 }, clarity: { value: .9 } };
   const examples = [{ text: 'Сильний початок та досвід з конкретикою', url: null }];

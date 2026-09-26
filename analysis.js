@@ -99,7 +99,7 @@ export function normalizePost(raw, source = 'import') {
   const post = {
     id: String(raw.id || raw.url || crypto.randomUUID()),
     text: raw.text.trim().slice(0, 4000),
-    url: typeof raw.url === 'string' && /^https:\/\/(www\.)?threads\.net\//.test(raw.url) ? raw.url : null,
+    url: typeof raw.url === 'string' && /^https:\/\/(www\.)?threads\.(?:net|com)\//.test(raw.url) ? raw.url : null,
     author: typeof raw.author === 'string' ? raw.author.slice(0, 100) : null,
     createdAt: raw.createdAt && !Number.isNaN(Date.parse(raw.createdAt)) ? new Date(raw.createdAt).toISOString() : null,
     rankType: raw.rankType === 'top' ? 'top' : raw.rankType === 'recent' ? 'recent' : null,
