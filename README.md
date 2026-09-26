@@ -40,3 +40,7 @@ GitHub Pages публікує лише інформаційні сторінки
 - Data Deletion Instructions URL: https://ylobodzynskyi-ship-it.github.io/threadsignal/data-deletion.html
 
 Node.js сервер із ключами API запускається окремо через `npm start`; GitHub Pages не виконує серверний код.
+
+## Стан інтеграції Meta
+
+Запити `GET /me?fields=id,username` і `GET /keyword_search` успішно виконані в Graph API Explorer із токеном, що має `threads_basic` та `threads_keyword_search`. Лічильники на сторінці Testing можуть оновлюватися до 24 годин. У тестовому режимі пошук наразі повертає лише публікації підключеного акаунта; для доступу інших користувачів Meta вимагає App Review. Спроба додати `threads_keyword_search` до App Review показала вимогу статусу Tech Provider, business verification та access verification. Публікація Meta-додатка сама собою не розгортає Node.js вебдодаток і не замінює App Review.
