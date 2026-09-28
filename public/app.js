@@ -34,7 +34,12 @@ function postCard(post) {
   const text = document.createElement('p');
   text.textContent = shorten(post.text);
   content.append(text);
-  if (post.viral) {
+  if (post.strong) {
+    const badge = document.createElement('span');
+    badge.className = 'viral-badge';
+    badge.textContent = '✳ На рівні 80-го перцентиля ваших постів';
+    content.append(badge);
+  } else if (post.viral) {
     const badge = document.createElement('span');
     badge.className = 'viral-badge';
     badge.textContent = '✳ Вірусний за фактичними показниками';
@@ -46,7 +51,7 @@ function postCard(post) {
     content.append(badge);
   }
   const meta = document.createElement('small');
-  meta.textContent = `${post.author ? `@${post.author} · ` : ''}${post.source === 'threads' ? 'Threads API' : 'Імпорт'}${post.createdAt ? ` · ${new Date(post.createdAt).toLocaleDateString('uk-UA')}` : ''}`;
+  meta.textContent = `${post.author ? `@${post.author} · ` : ''}${post.source === 'threads-own' ? 'Мої Threads Insights' : post.source === 'threads' ? 'Threads API' : 'Імпорт'}${post.createdAt ? ` · ${new Date(post.createdAt).toLocaleDateString('uk-UA')}` : ''}`;
   content.append(meta);
   if (post.url) {
     const link = document.createElement('a');
@@ -80,6 +85,9 @@ async function loadStatus() {
   $('nav-count').textContent = status.count;
   $('list-count').textContent = status.count;
   $('search-button').disabled = !status.threadsReady;
+  $('sync-own-button').disabled = !status.threadsReady || status.syncInProgress;
+  if (status.ownCount) message('sync-own-message', `Власних постів у базі: ${status.ownCount}, з переглядами: ${status.ownMeasured}.`);
+  else if (!status.threadsReady) message('sync-own-message', 'Додайте THREADS_ACCESS_TOKEN до .env і перезапустіть сервер.');
   if (!status.threadsReady) message('search-message', 'Додайте THREADS_ACCESS_TOKEN до .env і перезапустіть сервер.');
 }
 
@@ -93,11 +101,11 @@ function renderResult(result) {
   $('empty-result').classList.add('hidden');
   $('result').classList.remove('hidden');
   $('probability').textContent = result.probability == null ? '—' : `${result.probability}%`;
-  $('probability-tag').textContent = result.probability == null ? 'ЩЕ НЕМАЄ ДАНИХ' : 'ЕКСПЕРИМЕНТАЛЬНА ОЦІНКА';
+  $('probability-tag').textContent = result.probability == null ? 'ЩЕ НЕМАЄ ДАНИХ' : result.probabilityMode === 'personal' ? 'СИЛЬНІШЕ ЗА ЗВИЧАЙНИЙ РЕЗУЛЬТАТ' : 'ЕКСПЕРИМЕНТАЛЬНА ОЦІНКА';
   const searchSummary = result.searchDetails ? `Пошук «${result.searchDetails.query}»: ${result.searchDetails.found} результатів, ${result.searchDetails.measured} з метриками.` : '';
-  $('probability-note').textContent = [result.note, searchSummary, result.searchNote].filter(Boolean).join(' ');
+  $('probability-note').textContent = [result.probabilityGoal, result.note, searchSummary, result.searchNote].filter(Boolean).join(' ');
   $('probability-fill').style.width = `${result.probability || 0}%`;
-  $('sample-size').textContent = `З показниками: ${result.comparableCount} · Вірусних аналогів: ${result.viralCount} · У базі: ${result.libraryCount}`;
+  $('sample-size').textContent = `З показниками: ${result.comparableCount} · ${result.probabilityMode === 'personal' ? `Сильних аналогів: ${result.strongCount}` : `Вірусних аналогів: ${result.viralCount}`} · У базі: ${result.libraryCount}`;
 
   const rubrics = $('rubric-list');
   rubrics.replaceChildren();
@@ -113,7 +121,7 @@ function renderResult(result) {
   } else rubrics.textContent = 'Додайте TYPESAFE_API_KEY до .env для оцінки тексту.';
 
   const gaps = $('gaps-list'); gaps.replaceChildren();
-  $('gaps-title').textContent = result.benchmarkType === 'viral' ? 'Чого бракує до вірусних аналогів' : result.benchmarkType === 'top' ? 'Чого бракує до TOP постів Threads' : 'Чого бракує до вірусних аналогів';
+  $('gaps-title').textContent = result.benchmarkType === 'own-strong' ? 'Чого бракує до ваших сильних постів' : result.benchmarkType === 'viral' ? 'Чого бракує до вірусних аналогів' : result.benchmarkType === 'top' ? 'Чого бракує до TOP постів Threads' : 'Чого бракує до сильних аналогів';
   if (result.comparisonNote) {
     const empty = document.createElement('p'); empty.className = 'gap-empty'; empty.textContent = result.comparisonNote; gaps.append(empty);
   } else if (!result.benchmarkCount) {
@@ -142,6 +150,7 @@ function renderResult(result) {
   const tipsData = result.suggestions.length ? result.suggestions : ['Порівняйте кілька варіантів першого рядка та залиште найсильніший.'];
   tipsData.forEach(tip => { const li = document.createElement('li'); li.textContent = tip; tips.append(li); });
   $('similar-section').classList.toggle('hidden', result.similar.length === 0);
+  $('similar-hint').textContent = result.probabilityMode === 'personal' ? 'СИЛЬНІ ВАШІ ПОСТИ ПЕРШИМИ' : 'ВІРУСНІ ПРИКЛАДИ ПЕРШИМИ';
   $('similar-list').replaceChildren(...result.similar.map(postCard));
 }
 
@@ -164,6 +173,17 @@ $('search-button').addEventListener('click', async () => {
     message('search-message', `Знайдено ${result.found} результатів, у базі ${result.saved}. З показниками: ${result.measured}.`);
     await Promise.all([loadStatus(), loadPosts()]);
   } catch (error) { message('search-message', error.message, true); }
+  finally { button.disabled = false; }
+});
+
+$('sync-own-button').addEventListener('click', async () => {
+  const button = $('sync-own-button'); button.disabled = true;
+  message('sync-own-message', 'Завантажуємо власні пости та їхні Insights з Meta...');
+  try {
+    const result = await api('/api/threads/sync-own', { method: 'POST' });
+    await Promise.all([loadStatus(), loadPosts()]);
+    message('sync-own-message', `@${result.username}: завантажено ${result.imported} постів, ${result.measured} з переглядами.${result.failed ? ` Не вдалося отримати Insights для ${result.failed}.` : ''}`);
+  } catch (error) { message('sync-own-message', error.message, true); }
   finally { button.disabled = false; }
 });
 

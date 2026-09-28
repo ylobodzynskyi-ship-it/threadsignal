@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { closest, estimate, gapsFromBenchmarks, normalizePost, viral } from './analysis.js';
+import { closest, estimate, gapsFromBenchmarks, normalizePost, personalViewThreshold, viral } from './analysis.js';
 
 test('similar posts are ranked by shared topic words', () => {
   const posts = [
@@ -17,6 +17,15 @@ test('estimate uses observed outcome and Jev scores', () => {
   assert.ok(estimate(high, scores) > estimate(low, scores));
   assert.equal(estimate([], scores), null);
   assert.equal(viral(high[0]), true);
+});
+
+test('personal benchmark uses only measured own posts', () => {
+  const own = Array.from({ length: 20 }, (_, index) => ({ source: 'threads-own', views: (index + 1) * 10 }));
+  assert.equal(personalViewThreshold([...own, { source: 'threads', views: 1000000 }]), 160);
+  assert.equal(personalViewThreshold(own.slice(0, 19)), null);
+  const scores = Object.fromEntries(['hook', 'specificity', 'conversation', 'clarity'].map(key => [key, { value: .7 }]));
+  assert.ok(estimate([{ views: 200, similarity: .8 }], scores, post => post.views >= 160) >
+    estimate([{ views: 20, similarity: .8 }], scores, post => post.views >= 160));
 });
 
 test('import rejects invalid statistics', () => {

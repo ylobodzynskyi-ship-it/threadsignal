@@ -2,7 +2,8 @@ import http from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { closest, estimate, gapsFromBenchmarks, normalizePost, RUBRICS, suggestions, viral, words } from './analysis.js';
+import { closest, estimate, gapsFromBenchmarks, normalizePost, personalViewThreshold, RUBRICS, suggestions, viral, words } from './analysis.js';
+import { fetchOwnPosts } from './threads-own.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 try {
@@ -15,6 +16,7 @@ try {
 
 const dataPath = path.join(root, 'data', 'posts.json');
 let posts = [];
+let syncInProgress = false;
 try { posts = JSON.parse(await readFile(dataPath, 'utf8')); } catch { /* Empty library on first run. */ }
 
 const save = async () => {
@@ -133,25 +135,6 @@ async function threadsSearch(query, mode) {
   }, 'threads'));
 }
 
-async function postInsights(post) {
-  if (!post.id || !process.env.THREADS_ACCESS_TOKEN) return post;
-  const url = new URL(`https://graph.threads.net/v1.0/${encodeURIComponent(post.id)}/insights`);
-  url.searchParams.set('metric', 'views,likes,replies,reposts');
-  try {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${process.env.THREADS_ACCESS_TOKEN}` },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) return post;
-    const result = await response.json();
-    const metrics = Object.fromEntries((result.data || []).map(item => [item.name, Number(item.total_value?.value ?? item.values?.[0]?.value)]));
-    for (const field of ['views', 'likes', 'replies', 'reposts']) {
-      if (Number.isFinite(metrics[field]) && metrics[field] >= 0) post[field] = metrics[field];
-    }
-  } catch { /* Insights may be unavailable for public posts. */ }
-  return post;
-}
-
 async function collectThreads(query) {
   const [top, recent] = await Promise.all([threadsSearch(query, 'TOP'), threadsSearch(query, 'RECENT')]);
   const found = [];
@@ -159,23 +142,20 @@ async function collectThreads(query) {
   for (const post of [...top, ...recent]) {
     if (!seen.has(post.id) && found.length < 10) { found.push(post); seen.add(post.id); }
   }
-  const measured = [];
-  for (let index = 0; index < found.length; index += 5) {
-    measured.push(...await Promise.all(found.slice(index, index + 5).map(postInsights)));
-  }
   const byId = new Map(posts.map(post => [post.id, post]));
-  measured.forEach(post => {
+  found.forEach(post => {
     const previous = byId.get(post.id);
     if (previous) {
       for (const field of ['views', 'followers', 'likes', 'replies', 'reposts']) {
         if (post[field] == null) post[field] = previous[field];
       }
+      if (previous.source === 'threads-own') post.source = previous.source;
     }
     byId.set(post.id, post);
   });
   posts = [...byId.values()].slice(-5000);
   await save();
-  return { found: top.length + recent.length, saved: posts.length, measured: measured.filter(post => post.views != null || post.likes != null || post.replies != null || post.reposts != null).length };
+  return { found: top.length + recent.length, saved: posts.length, measured: found.filter(post => post.views != null || post.likes != null || post.replies != null || post.reposts != null).length };
 }
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -186,9 +166,14 @@ const server = http.createServer(async (req, res) => {
       jevReady: Boolean(process.env.TYPESAFE_API_KEY && process.env.TYPESAFE_API_KEY !== 'your_key_here'),
       threadsReady: Boolean(process.env.THREADS_ACCESS_TOKEN),
       count: posts.length,
-      measured: posts.filter(post => post.views != null || post.likes != null || post.replies != null || post.reposts != null).length
+      measured: posts.filter(post => post.views != null || post.likes != null || post.replies != null || post.reposts != null).length,
+      ownCount: posts.filter(post => post.source === 'threads-own').length,
+      ownMeasured: posts.filter(post => post.source === 'threads-own' && post.views != null).length,
+      syncInProgress
     });
-    if (url.pathname === '/api/posts' && req.method === 'GET') return json(res, 200, { posts: posts.slice(-100).reverse() });
+    if (url.pathname === '/api/posts' && req.method === 'GET') return json(res, 200, {
+      posts: [...posts].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 100)
+    });
     if (url.pathname === '/api/posts' && req.method === 'POST') {
       const input = await body(req);
       if (!Array.isArray(input.posts) || input.posts.length > 500) throw new Error('Передайте масив posts до 500 елементів.');
@@ -204,6 +189,24 @@ const server = http.createServer(async (req, res) => {
       const query = String(input.query || '').trim();
       if (query.length < 2 || query.length > 100) throw new Error('Введіть тему пошуку від 2 до 100 символів.');
       return json(res, 200, await collectThreads(query));
+    }
+    if (url.pathname === '/api/threads/sync-own' && req.method === 'POST') {
+      if (syncInProgress) return json(res, 409, { error: 'Синхронізація вже триває.' });
+      syncInProgress = true;
+      try {
+        const result = await fetchOwnPosts(process.env.THREADS_ACCESS_TOKEN);
+        const byId = new Map(posts.map(post => [post.id, post]));
+        for (const post of result.posts) {
+          const previous = byId.get(post.id);
+          if (previous) for (const field of ['views', 'likes', 'replies', 'reposts']) {
+            if (post[field] == null) post[field] = previous[field];
+          }
+          byId.set(post.id, post);
+        }
+        posts = [...byId.values()].slice(-5000);
+        await save();
+        return json(res, 200, { username: result.username, fetched: result.fetched, imported: result.posts.length, measured: result.measured, failed: result.failed, skipped: result.skipped, count: posts.length });
+      } finally { syncInProgress = false; }
     }
     if (url.pathname === '/api/analyze' && req.method === 'POST') {
       const input = await body(req);
@@ -230,12 +233,17 @@ const server = http.createServer(async (req, res) => {
       const scores = judgment?.scores || null;
       const matches = judgment ? candidates.map((post, index) => ({ ...post, relevance: judgment.relevance[index] }))
         .filter(post => post.relevance >= .3).sort((a, b) => b.relevance - a.relevance).slice(0, 8) : candidates.slice(0, 8);
-      const measured = matches.filter(post => post.views != null || post.likes != null || post.replies != null || post.reposts != null);
-      const probability = estimate(measured, scores);
-      const viralMatches = matches.filter(post => measured.includes(post) && viral(post)).sort((a, b) => b.relevance - a.relevance);
-      const topMatches = matches.filter(post => post.rankType === 'top' && !viralMatches.includes(post)).sort((a, b) => b.relevance - a.relevance);
-      const benchmarkType = viralMatches.length ? 'viral' : topMatches.length ? 'top' : null;
-      const benchmarkPosts = (viralMatches.length ? viralMatches : topMatches).slice(0, 3);
+      const ownThreshold = personalViewThreshold(posts);
+      const ownMode = ownThreshold != null;
+      const measured = matches.filter(post => ownMode ? post.source === 'threads-own' && post.views != null : post.views != null || post.likes != null || post.replies != null || post.reposts != null);
+      const successful = ownMode ? post => post.views >= ownThreshold : viral;
+      const ownHistory = ownMode ? posts.filter(post => post.source === 'threads-own' && post.views != null) : [];
+      const baseline = ownMode ? ownHistory.filter(successful).length / ownHistory.length : .5;
+      const probability = estimate(measured, scores, successful, baseline);
+      const strongMatches = matches.filter(post => measured.includes(post) && successful(post)).sort((a, b) => b.relevance - a.relevance);
+      const topMatches = matches.filter(post => post.rankType === 'top' && !strongMatches.includes(post)).sort((a, b) => b.relevance - a.relevance);
+      const benchmarkType = strongMatches.length ? ownMode ? 'own-strong' : 'viral' : topMatches.length ? 'top' : null;
+      const benchmarkPosts = (strongMatches.length ? strongMatches : topMatches).slice(0, 3);
       let benchmarkScores = [];
       let comparisonNote = null;
       if (scores && benchmarkPosts.length) {
@@ -243,13 +251,16 @@ const server = http.createServer(async (req, res) => {
         catch (error) { comparisonNote = error.message; }
       }
       const gaps = gapsFromBenchmarks(scores, benchmarkPosts, benchmarkScores);
-      const orderedMatches = [...viralMatches, ...topMatches, ...matches.filter(post => !viralMatches.includes(post) && !topMatches.includes(post))];
+      const orderedMatches = [...strongMatches, ...topMatches, ...matches.filter(post => !strongMatches.includes(post) && !topMatches.includes(post))];
       return json(res, 200, {
-        scores, probability, similar: orderedMatches.slice(0, 5).map(post => ({ ...post, viral: measured.includes(post) && viral(post) })),
-        comparableCount: measured.length, viralCount: viralMatches.length, libraryCount: posts.length,
+        scores, probability, probabilityMode: ownMode ? 'personal' : 'viral',
+        probabilityGoal: ownMode ? `Щонайменше ${ownThreshold} переглядів — 80-й перцентиль ваших постів` : 'Досягти порогу вірусності',
+        similar: orderedMatches.slice(0, 5).map(post => ({ ...post, viral: measured.includes(post) && viral(post), strong: ownMode && measured.includes(post) && successful(post) })),
+        comparableCount: measured.length, viralCount: matches.filter(post => measured.includes(post) && viral(post)).length,
+        strongCount: strongMatches.length, libraryCount: posts.length,
         benchmarkType, benchmarkCount: benchmarkPosts.length, gaps, comparisonNote,
         suggestions: scores ? suggestions(scores) : [],
-        note: !scores ? 'Додайте ключ Jev для семантичної оцінки.' : !measured.length ? 'Додайте пости з реальними показниками для відсотка.' : 'Експериментальна оцінка на основі схожих постів і Jev; перевірте її на історичних даних.',
+        note: !scores ? 'Додайте ключ Jev для семантичної оцінки.' : !measured.length ? 'Потрібні схожі власні пости з реальними переглядами для відсотка.' : ownMode ? 'Експериментальна оцінка на основі вашої історії та Jev. Вона ще не перевірена на відкладених постах.' : 'Експериментальна оцінка на основі схожих постів і Jev; перевірте її на історичних даних.',
         searchNote, searchDetails
       });
     }
@@ -265,4 +276,4 @@ const server = http.createServer(async (req, res) => {
 });
 
 const port = Number(process.env.PORT || 3000);
-server.listen(port, () => console.log(`Threads Analyser: http://localhost:${port}`));
+server.listen(port, process.env.HOST || '127.0.0.1', () => console.log(`Threads Analyser: http://localhost:${port}`));

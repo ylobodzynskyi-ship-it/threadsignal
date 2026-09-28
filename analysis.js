@@ -52,6 +52,13 @@ export function viral(post) {
   return engagement(post) >= 300;
 }
 
+export function personalViewThreshold(posts) {
+  const views = posts.filter(post => post.source === 'threads-own' && Number.isFinite(post.views))
+    .map(post => post.views).sort((a, b) => a - b);
+  if (views.length < 20) return null;
+  return views[Math.floor((views.length - 1) * .8)];
+}
+
 export function closest(text, posts, count = 8) {
   return posts.map(post => ({ ...post, similarity: similarity(text, post.text) }))
     .filter(post => post.similarity > 0)
@@ -59,11 +66,11 @@ export function closest(text, posts, count = 8) {
     .slice(0, count);
 }
 
-export function estimate(matches, scores) {
+export function estimate(matches, scores, successful = viral, baseline = .5) {
   if (!matches.length || !scores) return null;
-  const weighted = matches.reduce((sum, post) => sum + Math.max(.15, post.similarity) * Number(viral(post)), 0);
+  const weighted = matches.reduce((sum, post) => sum + Math.max(.15, post.similarity) * Number(successful(post)), 0);
   const weight = matches.reduce((sum, post) => sum + Math.max(.15, post.similarity), 0);
-  const observedRate = (weighted + 1) / (weight + 2);
+  const observedRate = (weighted + 2 * baseline) / (weight + 2);
   const quality = Object.values(scores).reduce((sum, item) => sum + item.value, 0) / Object.keys(scores).length;
   const adjustment = Math.exp((quality - .5) * 1.2);
   const odds = observedRate / (1 - observedRate) * adjustment;
