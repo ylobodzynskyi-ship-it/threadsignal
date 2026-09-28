@@ -5,7 +5,7 @@
 ## Запуск
 
 1. Встановіть Node.js 20 або новіший.
-2. Скопіюйте `.env.example` в `.env` і додайте `TYPESAFE_API_KEY`. Для автоматичного пошуку схожих постів додайте окремий `THREADS_ACCESS_TOKEN` із доступом до `threads_keyword_search` та інсайтів.
+2. Скопіюйте `.env.example` в `.env` і додайте `TYPESAFE_API_KEY`. Для автоматичного пошуку схожих постів додайте окремий `THREADS_ACCESS_TOKEN` із правами `threads_basic` та `threads_keyword_search`. Пошук чужих публічних постів також потребує схвалення `threads_keyword_search` через Meta App Review.
 3. Запустіть `npm start` і відкрийте `http://localhost:3000`.
 
 Сервер сам читає `.env`; додаткові пакети не потрібні. Ключ залишається на сервері.
@@ -20,7 +20,7 @@
 [{"text":"Текст поста","views":12000,"followers":1000,"likes":420,"replies":35,"reposts":61,"createdAt":"2026-09-20","url":"https://www.threads.net/..."}]
 ```
 
-Пости зберігаються локально в `data/posts.json`. За наявності токена Meta додаток шукає пости через `keyword_search` у режимах `TOP` і `RECENT` під час аналізу та пробує отримати їхні показники. Потрібні права `threads_keyword_search`; для запиту інсайтів — `threads_manage_insights`. Пошук Threads не повертає лічильники переглядів і реакцій у стандартних полях, а інсайти чужих публічних постів можуть бути недоступні. Тоді потрібен імпорт статистики з дозволеного джерела. Без токена Meta автоматичного завантаження немає.
+Пости зберігаються локально в `data/posts.json`. За наявності токена Meta додаток шукає пости через `keyword_search` у режимах `TOP` і `RECENT` під час аналізу. До схвалення `threads_keyword_search` Meta обмежує результати постами авторизованого користувача. Навіть після схвалення пошук повертає текст і метадані, але не перегляди чи лічильники взаємодій. `threads_manage_insights` дає статистику власних постів авторизованого користувача; для перевірених результатів чужих постів потрібне окреме дозволене джерело метрик. Без токена Meta автоматичного завантаження немає.
 
 ## Як читати оцінку
 
@@ -43,4 +43,4 @@ Node.js сервер із ключами API запускається окрем
 
 ## Стан інтеграції Meta
 
-Meta-додаток ThreadsAnalise опублікований. Meta Testing показує `Completed` для `threads_basic` та `threads_keyword_search`: запити `GET /me?fields=id,username` і `GET /keyword_search` успішно виконані в Graph API Explorer. Кожен тест дійсний 30 днів. Пошук наразі повертає лише публікації підключеного акаунта; для доступу інших користувачів Meta вимагає App Review. Спроба додати `threads_keyword_search` до App Review показала вимогу статусу Tech Provider, business verification та access verification. Публікація Meta-додатка сама собою не розгортає Node.js вебдодаток і не замінює App Review.
+Meta-додаток ThreadsAnalise опублікований. Meta Testing показує `Completed` для `threads_basic` та `threads_keyword_search`: запити `GET /me?fields=id,username` і `GET /keyword_search` успішно виконані в Graph API Explorer. Кожен тест дійсний 30 днів. Це підтверджує роботу тестових викликів, але не схвалення дозволу. [Документація Meta](https://developers.facebook.com/documentation/threads/keyword-search) прямо вказує: до схвалення `threads_keyword_search` пошук охоплює лише пости авторизованого користувача; після схвалення — чужі публічні пости. [Advanced Access](https://developers.facebook.com/documentation/development/graph-api/overview/access-levels) і [Tech Provider](https://developers.facebook.com/documentation/development/release/access-verification) мають окремі умови; перевірка Tech Provider стосується застосунків, заявлених бізнесом і призначених для роботи з даними інших бізнесів. Вона не є безпосередньою причиною поточних результатів пошуку. Заявка App Review залишається чернеткою. Публікація Meta-додатка сама собою не розгортає Node.js вебдодаток і не замінює App Review.
